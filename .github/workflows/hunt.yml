@@ -1,0 +1,82 @@
+name: OCI A1 VM hunter
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # 매시간 7분에 시작, 약 50분간 재시도
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: oci-a1-hunter
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install OCI CLI
+        run: pip install -r requirements.txt
+
+      - name: Write OCI config
+        env:
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_KEY: ${{ secrets.OCI_KEY }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          mkdir -p ~/.oci && chmod 700 ~/.oci
+          printf '%s\n' "$OCI_KEY" > ~/.oci/oci_api_key.pem
+          printf '%s\n' "$SSH_PUBLIC_KEY" > ~/.oci/ssh_key.pub
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=ap-singapore-2
+          key_file=~/.oci/oci_api_key.pem
+          EOF
+          sed -i 's/^ *//' ~/.oci/config
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem
+
+      - name: Hunt
+        id: hunt
+        env:
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: "True"
+          VM_NAME: llm-wiki-server
+          VM_OCPUS: "2"
+          VM_MEM_GB: "12"
+          VM_BOOT_GB: "100"
+          RUN_MINUTES: "48"
+        run: |
+          set +e
+          bash hunt.sh
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ $rc -eq 10 ]; then exit 0; fi
+          exit $rc
+
+      - name: Notify on GitHub and stop schedule
+        if: steps.hunt.outputs.rc == '10'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body="$(cat success.txt 2>/dev/null || echo 'VM이 이미 존재합니다. OCI 콘솔에서 확인하세요.')"
+          gh issue create -R "$GITHUB_REPOSITORY" --title "OCI A1 VM 생성 완료" \
+            --body "@${{ github.repository_owner }} ${body}" || true
+          gh workflow disable hunt.yml -R "$GITHUB_REPOSITORY"
