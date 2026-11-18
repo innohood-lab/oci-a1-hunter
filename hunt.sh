@@ -97,7 +97,7 @@ while [ "$(date +%s)" -lt "$end" ]; do
   IFS=',' read -ra AD_LIST <<< "$ADS"
   for AD in "${AD_LIST[@]}"; do
     attempt=$((attempt+1))
-    out=$(oci compute instance launch --availability-domain "$AD" --compartment-id "$TEN" \
+    out=$(oci --no-retry --read-timeout 120 compute instance launch --availability-domain "$AD" --compartment-id "$TEN" \
       --shape VM.Standard.A1.Flex --shape-config "{\"ocpus\":$OCPUS,\"memoryInGBs\":$MEM}" \
       --image-id "$IMAGE_ID" --subnet-id "$SUBNET_ID" --assign-public-ip true \
       --boot-volume-size-in-gbs "$BOOT_GB" --display-name "$NAME" \
